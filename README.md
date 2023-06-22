@@ -1,14 +1,16 @@
+![Project-eden-logo](https://github.com/felinis/RoomEditImproved/assets/94763702/3da3780a-0894-454b-8f1a-4e065329b44a)
+
 # RoomEditImproved
 Work-in-progress level editor for the game Project Eden, which was released in 2001 by Core Design.
 
-Written in high-quality C++, uses the native Windows API and Direct3D 12, with video RAM managed manually, no external dependencies.
+Written in high-quality C++, with the following features:
+- Lightweight UI using native Windows API
+- Modern Direct3D 12 renderer
+- Video RAM and GPU heaps managed manually, for maximum performance
+- Uses the _bindless textures_ feature, which allows for faster and more flexible texture streaming
+- No external dependencies
 
-## Preview
-Version 0.3
-<img width="948" alt="room_editor_rover_racing2" src="https://github.com/felinis/RoomEditImproved/assets/94763702/e746ca92-8bad-4bf9-8e52-a0623ca49228">
-Version 0.4
-<img width="948" alt="room_editor_hospital" src="https://github.com/felinis/RoomEditImproved/assets/94763702/db6817d2-25d1-4714-8b0a-38c1b55cd620">
-Version 0.6
-<img width="948" alt="room_editor_prop_value" src="https://github.com/felinis/RoomEditImproved/assets/94763702/3d5ec819-a61e-4bd4-ad07-328276621281">
-Version 0.7
+## How does it look like?
 <img width="948" alt="room_editor_230623" src="https://github.com/felinis/RoomEditImproved/assets/94763702/41000513-45fd-41ba-93d9-4b73174c996c">
+<img width="948" alt="room_editor_hospital" src="https://github.com/felinis/RoomEditImproved/assets/94763702/97b67785-d30b-4391-b342-f803c79e222a">
+<img width="948" alt="room_editor_prop_value" src="https://github.com/felinis/RoomEditImproved/assets/94763702/d58e4990-49ea-4f75-9bb7-fe24eb5dad8f">
