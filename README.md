@@ -11,6 +11,8 @@ Written in high-quality C++, with the following features:
 - No external dependencies
 
 ## How does it look like?
-<img width="948" alt="room_editor_230623" src="https://github.com/felinis/RoomEditImproved/assets/94763702/41000513-45fd-41ba-93d9-4b73174c996c">
+<img width="948" alt="up" src="https://github.com/felinis/RoomEditImproved/assets/94763702/69db9ec7-f0ed-44d2-96a8-2915ea365020">
+<img width="948" alt="c" src="https://github.com/felinis/RoomEditImproved/assets/94763702/3d2af3ec-b368-4160-95a5-c042a420e596">
 <img width="948" alt="room_editor_hospital" src="https://github.com/felinis/RoomEditImproved/assets/94763702/97b67785-d30b-4391-b342-f803c79e222a">
-<img width="948" alt="room_editor_prop_value" src="https://github.com/felinis/RoomEditImproved/assets/94763702/d58e4990-49ea-4f75-9bb7-fe24eb5dad8f">
+<img width="948" alt="a" src="https://github.com/felinis/RoomEditImproved/assets/94763702/8c54329f-fe92-4326-9d6f-4f253ac28659">
+
