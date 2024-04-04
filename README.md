@@ -14,3 +14,10 @@ The program sports a lightweight UI, which was programmed using the native Windo
 # Screens
 This screen shows the program user interface with a temple level loaded in. The user can add and remove objects, as well as alter their various attributes on the panel on the right.
 <img width="948" alt="up" src="https://github.com/felinis/RoomEditImproved/assets/94763702/69db9ec7-f0ed-44d2-96a8-2915ea365020">
+
+# Building Instructions
+- Install Visual Studio (2017 is recommended). I haven't tested MinGW, but make sure it supports C++17.
+- Install CMake (minimum 3.12).
+- Configure the CMakeLists.txt for the Visual Studio compiler. I personally used Visual Studio 2017 Professional.
+- Build.
+- Use the `edndec.exe` tool to decompress the level files, then open them inside Room Editor.
