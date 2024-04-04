@@ -1,3 +1,8 @@
+/*
+*	Room Editor Application
+*	(C) Moczulski Alan, 2023.
+*/
+
 #include "OrbitCamera.h"
 
 Matrix &OrbitCamera::GetViewMatrix()

@@ -1,0 +1,24 @@
+The codebase is subject to the following rules that I set up.
+
+-	Usage of MemoryPool (sbmemory/MemoryPool): very nice and simple linear allocator that replaces std::vector.
+
+-	No usage of exceptions: I haven't yet done any tests on whether ther're ok, so I didn't use them for now.
+
+-	Please, use tabs. I am not a fan of spaces. Tab spacing is up to you and your editor.
+
+-	Source/Header file names starting with an upper-case letter (like "Emitter.cc") describe exclusively a class.
+	Otherwise, they are C-like files which do not describe a class but rather a 'concept' (like "scene_view.cc").
+
+-	Never include source files. Only header files.
+
+-	When #including header files, respect the following ordering:
+		1. the relative header file (if source is "SceneView.cc", its relative header file is "SceneView.hh")
+		2. engine headers
+		3. C-standard and OS-specific headers (like <stdint.h> or <windows.h>)
+
+-	Usage of dependency injection is rare (only when needed). Sometimes, a child must be constructed using a reference to its parent,
+	so it can perform some of its own stuff, by using some of the parent's functions.
+
+Just look at the code if you need some more inspiration for rules/conventions!
+
+Moczulski Alan, 2023.

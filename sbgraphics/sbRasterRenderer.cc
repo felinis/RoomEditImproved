@@ -1,17 +1,18 @@
-/*
-*	Sabre Engine Graphics - Rasterisation Renderer implementation
-*	(C) Moczulski Alan, 2023.
-*/
+////////////////////////////////////////////////////////////////////////////////////////////////
+//	Sabre Engine Graphics - Rasterisation Renderer implementation
+//	(C) Moczulski Alan, 2023.
+////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "sbRasterRenderer.h"
-#include "shaders/vsScreenColored.h"
-#include "shaders/psColor.h"
-#include <assert.h>
+#include "sbRasterRenderer.hh"
+
+////////////////////////////////////////////////////////////////////////////////////////////////
 
 static constexpr uint32_t TEXTURES_ROOT_PARAM_INDEX = 0;
 static constexpr uint32_t SAMPLER_ROOT_PARAM_INDEX = 1;
 static constexpr uint32_t MATRIX_ROOT_PARAM_INDEX = 2;
 static constexpr uint32_t TEXINDEX_ROOT_PARAM_INDEX = 3;
+
+////////////////////////////////////////////////////////////////////////////////////////////////
 
 bool sbDescriptorHeap::Create(ID3D12Device *device)
 {
@@ -73,14 +74,20 @@ void sbDescriptorHeap::Destroy()
 		srvDescriptorHeap->Release();
 }
 
-void sbDescriptorHeap::SetViewProjectionMatrix(ID3D12GraphicsCommandList *commandList, Matrix &m)
+void sbDescriptorHeap::SetWorldViewProjectionMatrix(ID3D12GraphicsCommandList *commandList, const Matrix &m)
 {
 	commandList->SetGraphicsRoot32BitConstants(MATRIX_ROOT_PARAM_INDEX, 16, m, 0);
 }
 
-void sbDescriptorHeap::SetTexture(ID3D12GraphicsCommandList *commandList, uint32_t texindexDiffuse, uint32_t texindexLightmap)
+void sbDescriptorHeap::SetTexture(ID3D12GraphicsCommandList *commandList, uint32_t textureIndex0)
 {
-	uint32_t data[2] = {texindexDiffuse, texindexLightmap};
+	uint32_t data[] = { textureIndex0 };
+	commandList->SetGraphicsRoot32BitConstants(TEXINDEX_ROOT_PARAM_INDEX, 1, &data, 0);
+}
+
+void sbDescriptorHeap::SetTexture(ID3D12GraphicsCommandList *commandList, uint32_t textureIndex0, uint32_t textureIndex1)
+{
+	uint32_t data[] = { textureIndex0, textureIndex1 };
 	commandList->SetGraphicsRoot32BitConstants(TEXINDEX_ROOT_PARAM_INDEX, 2, &data, 0);
 }
 
@@ -108,6 +115,8 @@ D3D12_CPU_DESCRIPTOR_HANDLE sbDescriptorHeap::CreateSRV(ID3D12Device *device, DX
 	device->CreateShaderResourceView(texture, &srvDesc, handle); //can also be used to overwrite an already-existing SRV in the heap
 	return handle;
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////
 
 bool sbRasterRenderer::Create(HWND hwnd)
 {
@@ -158,91 +167,11 @@ bool sbRasterRenderer::Create(HWND hwnd)
 		}
 	}
 
-	//create the graphics pipeline state object (PSO)
-	{
-		//define the vertex input layout
-		D3D12_INPUT_ELEMENT_DESC inputElementDescs[] =
-		{
-			{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-			{ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-			{ "TEXCOORD", 1, DXGI_FORMAT_R32G32_FLOAT, 0, 20, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
-		};
-
-		/*
-		ID3D12RootSignature *pRootSignature;
-		D3D12_SHADER_BYTECODE VS;
-		D3D12_SHADER_BYTECODE PS;
-		D3D12_SHADER_BYTECODE DS;
-		D3D12_SHADER_BYTECODE HS;
-		D3D12_SHADER_BYTECODE GS;
-		D3D12_STREAM_OUTPUT_DESC StreamOutput;
-		D3D12_BLEND_DESC BlendState;
-		uint32_t SampleMask;
-		D3D12_RASTERIZER_DESC RasterizerState;
-		D3D12_DEPTH_STENCIL_DESC DepthStencilState;
-		D3D12_INPUT_LAYOUT_DESC InputLayout;
-		D3D12_INDEX_BUFFER_STRIP_CUT_VALUE IBStripCutValue;
-		D3D12_PRIMITIVE_TOPOLOGY_TYPE PrimitiveTopologyType;
-		uint32_t NumRenderTargets;
-		DXGI_FORMAT RTVFormats[ 8 ];
-		DXGI_FORMAT DSVFormat;
-		DXGI_SAMPLE_DESC SampleDesc;
-		uint32_t NodeMask;
-		D3D12_CACHED_PIPELINE_STATE CachedPSO;
-		D3D12_PIPELINE_STATE_FLAGS Flags;
-		*/
-
-		D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
-		psoDesc.pRootSignature = rootSignature;
-
-		psoDesc.VS.pShaderBytecode = g_VSMain;
-		psoDesc.VS.BytecodeLength = sizeof(g_VSMain);
-		psoDesc.PS.pShaderBytecode = g_PSMain;
-		psoDesc.PS.BytecodeLength = sizeof(g_PSMain);
-
-		psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
-		psoDesc.SampleMask = UINT_MAX;
-		psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
-		psoDesc.RasterizerState.FrontCounterClockwise = TRUE;
-		psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
-		psoDesc.InputLayout = { inputElementDescs, _countof(inputElementDescs) };
-
-		psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-
-		psoDesc.NumRenderTargets = 1;
-		psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
-		psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
-
-		psoDesc.SampleDesc.Count = 1;
-
-		if FAILED(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pipelineState)))
-		{
-			return false;
-		}
-	}
-
-	//create the fallback texture
-	{
-		struct RGBAColor
-		{
-			uint8_t r, g, b, a;
-		};
-		RGBAColor data[1] =
-		{
-			255, 255, 255, 255
-		};
-		fallbackTexture = CreateTexture(data, sizeof(data), 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, FALLBACK_TEXTURE_INDEX);
-	}
-
 	return true;
 }
 
 void sbRasterRenderer::Destroy()
 {
-	DestroyTexture(fallbackTexture);
-
-	if (pipelineState)
-		pipelineState->Release();
 	if (rootSignature)
 		rootSignature->Release();
 
@@ -254,32 +183,35 @@ void sbRasterRenderer::Destroy()
 
 void sbRasterRenderer::SaveInternalState()
 {
-	heap.SetSafeResetCheckpoint(); //TODO: put this in sbBaseRenderer::SaveInternalState
+	heapManager.SetSafeResetCheckpoint(); //TODO: put this in sbBaseRenderer::SaveInternalState
 //	SetSafeResetCheckpoint(fallbackTexture.descriptorHandle);
 }
 
 void sbRasterRenderer::RestoreInternalState()
 {
-	heap.Reset(); //TODO: put this in sbBaseRenderer::SaveInternalState
+	heapManager.Reset(); //TODO: put this in sbBaseRenderer::SaveInternalState
 }
 
-bool sbRasterRenderer::StartFrame(Matrix &viewProjection)
+void sbRasterRenderer::ClearAndPresentImmediately()
+{
+	if (!sbBaseRenderer::StartFrame())
+		return;
+
+	swapChain.ClearRenderTarget(commandList);
+
+	sbBaseRenderer::EndAndPresentFrame();
+}
+
+bool sbRasterRenderer::StartFrame()
 {
 	if (!sbBaseRenderer::StartFrame())
 		return false;
 
 	swapChain.ClearRenderTarget(commandList);
 
-	commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
 	commandList->SetGraphicsRootSignature(rootSignature);
-	commandList->SetPipelineState(pipelineState);
 
 	descriptorHeap.Use(commandList);
-	descriptorHeap.SetViewProjectionMatrix(commandList, viewProjection);
-
-//	BindMesh(testCube);
-//	DrawBoundMesh(testCube.numIndices);
 
 	return true;
 }
@@ -288,68 +220,20 @@ void sbRasterRenderer::EndAndPresentFrame()
 {
 	sbBaseRenderer::EndAndPresentFrame();
 }
-#if 0
-std::optional<sbMesh> sbRasterRenderer::CreateTestMesh()
-{
-	Vertex verts[] =
-	{
-		{ { -1.0f, -1.0f, -1.0f }, { 1.0f, 0.0f, 0.0f, 1.0f } },
-		{ { -1.0f, -1.0f,  1.0f }, { 0.0f, 1.0f, 0.0f, 1.0f } },
-		{ { -1.0f,  1.0f, -1.0f }, { 0.0f, 0.0f, 1.0f, 1.0f } },
-		{ { -1.0f,  1.0f,  1.0f }, { 1.0f, 1.0f, 0.0f, 1.0f } },
-		{ {  1.0f, -1.0f, -1.0f }, { 1.0f, 0.0f, 1.0f, 1.0f } },
-		{ {  1.0f, -1.0f,  1.0f }, { 0.0f, 1.0f, 1.0f, 1.0f } },
-		{ {  1.0f,  1.0f, -1.0f }, { 1.0f, 1.0f, 1.0f, 1.0f } },
-		{ {  1.0f,  1.0f,  1.0f }, { 0.5f, 0.5f, 0.5f, 1.0f } },
-	};
-	uint32_t indices[] =
-	{
-		0, 1, 2, 1, 3, 2,
-		4, 0, 6, 0, 2, 6,
-		5, 4, 7, 4, 6, 7,
-		1, 5, 3, 5, 7, 3,
-		4, 5, 0, 5, 1, 0,
-		2, 3, 6, 3, 7, 6,
-	};
 
-	return CreateMesh(verts, 8, indices, 36);
+bool sbRasterRenderer::CreatePipeline(Pipeline &pipeline) const
+{
+	return pipeline.Create(device, rootSignature);
 }
-#endif
-sbMesh sbRasterRenderer::CreateMesh(const Vertex *verts, uint32_t numVerts, const uint32_t *indices, uint32_t numIndices)
+
+void sbRasterRenderer::DestroyPipeline(Pipeline &pipeline) const
 {
-	D3D12_RESOURCE_DESC desc = {};
-	desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-	desc.Height = 1;
-	desc.DepthOrArraySize = 1;
-	desc.MipLevels = 1;
-	desc.SampleDesc.Count = 1;
-	desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+	pipeline.Destroy();
+}
 
-	//create and fill vertex buffer
-	ID3D12Resource *vertexBuffer;
-	{
-		const uint32_t vertexBufferSize = numVerts * sizeof(Vertex);
-		desc.Width = vertexBufferSize;
-		if (!heap.AllocateAndFillBuffer(device, &desc, verts, D3D12_RESOURCE_STATE_COPY_DEST, &vertexBuffer))
-		{
-			assert(0);
-			return sbMesh();
-		}
-	}
-
-	//create and fill index buffer
-	ID3D12Resource *indexBuffer;
-	{
-		const uint32_t indexBufferSize = numIndices * sizeof(UINT);
-		desc.Width = indexBufferSize;
-		if (!heap.AllocateAndFillBuffer(device, &desc, indices, D3D12_RESOURCE_STATE_COPY_DEST, &indexBuffer))
-		{
-			assert(0);
-			return sbMesh();
-		}
-	}
-
-	return std::move(sbMesh(vertexBuffer, indexBuffer, numIndices));
+void sbRasterRenderer::UsePipeline(const Pipeline &pipeline) const
+{
+	pipeline.Use(commandList);
 }
 
 void sbRasterRenderer::DestroyMesh(sbMesh &mesh)
@@ -358,24 +242,6 @@ void sbRasterRenderer::DestroyMesh(sbMesh &mesh)
 		((ID3D12Resource*)mesh.vertexBuffer)->Release();
 	if (mesh.indexBuffer)
 		((ID3D12Resource*)mesh.indexBuffer)->Release();
-}
-
-void sbRasterRenderer::BindMesh(const sbMesh &mesh)
-{
-	ID3D12Resource* vb = (ID3D12Resource*)mesh.vertexBuffer;
-	ID3D12Resource* ib = (ID3D12Resource*)mesh.indexBuffer;
-
-	D3D12_VERTEX_BUFFER_VIEW vbv{};
-	vbv.BufferLocation = vb->GetGPUVirtualAddress();
-	vbv.StrideInBytes = sizeof(Vertex);
-	vbv.SizeInBytes = vb->GetDesc().Width;
-	commandList->IASetVertexBuffers(0, 1, &vbv);
-
-	D3D12_INDEX_BUFFER_VIEW ibv{};
-	ibv.BufferLocation = ib->GetGPUVirtualAddress();
-	ibv.SizeInBytes = ib->GetDesc().Width;
-	ibv.Format = DXGI_FORMAT_R32_UINT;
-	commandList->IASetIndexBuffer(&ibv);
 }
 
 void sbRasterRenderer::DrawBoundMesh(uint32_t numIndices, uint32_t startIndex)
@@ -391,12 +257,16 @@ GPUResource sbRasterRenderer::CreateTexture(
 	D3D12_RESOURCE_DESC desc = {};
 	desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
 	desc.Width = width;
+	if (desc.Width < 4)
+		desc.Width = 4; //D3D12 alignment requirement
 	desc.Height = height;
+	if (desc.Height < 4)
+		desc.Height = 4; //D3D12 alignment requirement
 	desc.DepthOrArraySize = 1;
 	desc.MipLevels = 1;
 	desc.Format = format;
 	desc.SampleDesc.Count = 1;
-	if (!heap.AllocateAndFillTexture(device, &desc, data, dataSize, D3D12_RESOURCE_STATE_COPY_DEST, &texture))
+	if (!heapManager.AllocateAndFillTexture(device, &desc, data, dataSize, D3D12_RESOURCE_STATE_COPY_DEST, &texture))
 		return nullptr;
 
 	//create a shader resource view so that we can access the texture from a shader
@@ -411,17 +281,17 @@ void sbRasterRenderer::DestroyTexture(GPUResource& texture)
 		((ID3D12Resource*)texture)->Release();
 }
 
-void sbRasterRenderer::UseDiffuseAndLightmap(uint32_t texindexDiffuse, uint32_t texindexLightmap)
+void sbRasterRenderer::SetWorldViewProjectionMatrix(const Matrix &m)
 {
-	descriptorHeap.SetTexture(commandList, texindexDiffuse, texindexLightmap);
+	descriptorHeap.SetWorldViewProjectionMatrix(commandList, m);
 }
 
-void sbRasterRenderer::UseFullbrightDiffuse(uint32_t texindexDiffuse)
+void sbRasterRenderer::UseOneTexture(uint32_t textureIndex0)
 {
-	descriptorHeap.SetTexture(commandList, texindexDiffuse, FALLBACK_TEXTURE_INDEX);
+	descriptorHeap.SetTexture(commandList, textureIndex0);
 }
 
-void sbRasterRenderer::UseFallbackDiffuseAndLightmap()
+void sbRasterRenderer::UseTwoTextures(uint32_t textureIndex0, uint32_t textureIndex1)
 {
-	descriptorHeap.SetTexture(commandList, FALLBACK_TEXTURE_INDEX, FALLBACK_TEXTURE_INDEX);
+	descriptorHeap.SetTexture(commandList, textureIndex0, textureIndex1);
 }

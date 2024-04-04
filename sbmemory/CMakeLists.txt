@@ -1,7 +1,7 @@
 add_library(
 	sbmemory
-	"internal/Array.h"
-	"MemoryPool.h"
+	"Array.hh"
+	"MemoryPool.hh"
 	"MemoryPool.cc"
 )
 

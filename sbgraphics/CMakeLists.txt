@@ -1,14 +1,16 @@
 add_library(
 	sbgraphics
+
+	# heap management
+	"base/heap/DynamicHeap.cc"
+	"base/heap/UploadHeap.cc"
+	"base/HeapManager.cc"
+
 	"base/engineFeatures.cc"
-	"base/engineFeatures.h"
 	"base/sbBaseRenderer.cc"
-	"base/sbBaseRenderer.h"
+
 	"sbRasterRenderer.cc"
-	"sbRasterRenderer.h"
-	"sbRenderer.h"
 #	"sbRTRenderer.cc"
-#	"sbRTRenderer.h"
 )
 
 #use the ray tracing engine feature

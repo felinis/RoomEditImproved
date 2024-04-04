@@ -1,14 +1,20 @@
 #pragma once
 #include <math.h> //sqrtf, sinf, cosf
+#include <float.h> //finite
 
 //main vector class
 class __declspec(align(4)) Vector
 {
 public:
-	float x, y, z, unused;
+	float x, y, z, w;
 	
-	constexpr Vector() : x(0.0f), y(0.0f), z(0.0f), unused(0.0f) {}
-	constexpr Vector(float x, float y, float z, float w = 0.0f) : x(x), y(y), z(z), unused(w) {}
+	constexpr Vector() : x(0.0f), y(0.0f), z(0.0f), w(0.0f) {}
+	constexpr Vector(float x, float y, float z, float w = 0.0f) : x(x), y(y), z(z), w(w) {}
+
+	operator float *()
+	{
+		return &x;
+	}
 
 	operator const float *()
 	{
@@ -110,6 +116,11 @@ public:
 		return sqrtf(x * x + y * y + z * z);
 	}
 
+	float Length() const
+	{
+		return Norm();
+	}
+
 	float LengthSquared() const
 	{
 		return x * x + y * y + z * z;
@@ -207,6 +218,11 @@ public:
 			x * cosAngle - y * sinAngle,
 			x * sinAngle + y * cosAngle,
 			z);
+	}
+
+	bool Valid() const
+	{
+		return _finite(x) && _finite(y) && _finite(z);
 	}
 };
 static_assert(sizeof(Vector) == 16, "Vector MUST be 16 bytes, while it is not!");

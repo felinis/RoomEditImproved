@@ -1,6 +1,6 @@
 add_library(
 	sbfilesystem
-	"ReadStream.h"
+	"ReadStream.hh"
 	"ReadStream.cc"
 )
 

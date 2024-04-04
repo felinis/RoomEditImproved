@@ -1,725 +1,18 @@
-/*
-*	Sabre Engine Graphics - Direct3D 12 implementation
-*	(C) Moczulski Alan, 2023.
-*/
+////////////////////////////////////////////////////////////////////////////////////////////////
+//	Sabre Engine Graphics - Direct3D 12 implementation
+//	(C) Moczulski Alan, 2023.
+////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include "sbBaseRenderer.h"
-#include "engineFeatures.h"
+#include "sbBaseRenderer.hh"
+#include "engineFeatures.hh"
 #include <assert.h>
 
-bool sbHeap::Create(ID3D12Device *device)
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+bool sbSwapChain::Create(ID3D12Device *device, HWND hWnd, IDXGIFactory6 *factory, HeapManager &heapManager)
 {
-	D3D12_HEAP_PROPERTIES heapProperties = {};
-	//we are only using a single node/GPU
-	heapProperties.CreationNodeMask = 1;
-	heapProperties.VisibleNodeMask = 1;
+	assert(device && "Invalid ID3D12Device!");
 
-	//create default heap
-	{
-		heapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-		D3D12_HEAP_DESC heapDesc = {};
-		heapDesc.SizeInBytes = VRAM_BUDGET;
-		heapDesc.Properties = heapProperties;
-		heapDesc.Alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
-		if FAILED(device->CreateHeap(&heapDesc, IID_PPV_ARGS(&heap)))
-		{
-			DebugPrint("Failed to create the default heap.");
-			return false;
-		}
-	}
-
-	//create upload heap
-	{
-		heapProperties.Type = D3D12_HEAP_TYPE_UPLOAD;
-
-		D3D12_HEAP_DESC heapDesc = {};
-		heapDesc.SizeInBytes = UPLOAD_VRAM_BUDGET;
-		heapDesc.Properties = heapProperties;
-		heapDesc.Alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
-		heapDesc.Flags = D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS;
-		if FAILED(device->CreateHeap(&heapDesc, IID_PPV_ARGS(&uploadHeap)))
-		{
-			DebugPrint("Failed to create the upload heap.");
-			return false;
-		}
-	}
-
-	return true;
-}
-
-void sbHeap::Destroy()
-{
-	if (uploadHeap)
-		uploadHeap->Release();
-	if (heap)
-		heap->Release();
-}
-
-bool sbHeap::ImmediatelyUploadToHeap(
-	ID3D12Device *device,
-	const D3D12_RESOURCE_DESC *desc,
-	const D3D12_RESOURCE_ALLOCATION_INFO *ai,
-	const void *data,
-	D3D12_RESOURCE_STATES initialStates,
-	ID3D12Resource **bufferResource
-)
-{
-	//check if it will fit in our upload budget
-	if (ai->SizeInBytes > UPLOAD_VRAM_BUDGET)
-	{
-		DebugPrint("Out of GPU upload memory budget!");
-		return false;
-	}
-
-	//create a buffer on the upload heap
-	ID3D12Resource *uploadBuffer;
-	if FAILED(device->CreatePlacedResource(
-		uploadHeap,
-		0,
-		desc,
-		D3D12_RESOURCE_STATE_GENERIC_READ,
-		nullptr,
-		IID_PPV_ARGS(&uploadBuffer)
-	))
-	{
-		DebugPrint("Failed to create the resource on the GPU's default heap.");
-		return false;
-	}
-
-	//copy data to the upload buffer
-	UINT8 *pData;
-	CD3DX12_RANGE readRange(0, 0);
-	HRESULT hr = uploadBuffer->Map(0, &readRange, reinterpret_cast<void **>(&pData));
-
-	if (FAILED(hr))
-	{
-		DebugPrint("Failed to map upload buffer.");
-		uploadBuffer->Release();
-		return false;
-	}
-	UINT64 dataSize = desc->Width * desc->Height;
-	memcpy(pData, data, dataSize);
-	uploadBuffer->Unmap(0, nullptr);
-
-	//copy data from the upload buffer to the default heap buffer
-	ID3D12CommandAllocator *cmdAlloc;
-	hr = device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COPY, IID_PPV_ARGS(&cmdAlloc));
-	if (FAILED(hr))
-	{
-		DebugPrint("Failed to create command allocator.");
-		uploadBuffer->Release();
-		return false;
-	}
-
-	ID3D12GraphicsCommandList *cmdList;
-	hr = device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COPY, cmdAlloc, nullptr, IID_PPV_ARGS(&cmdList));
-	if (FAILED(hr))
-	{
-		DebugPrint("Failed to create command list.");
-		cmdAlloc->Release();
-		uploadBuffer->Release();
-		return false;
-	}
-
-//	cmdList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(*bufferResource, initialStates, D3D12_RESOURCE_STATE_COPY_DEST));
-	cmdList->CopyBufferRegion(*bufferResource, 0, uploadBuffer, 0, dataSize);
-//	cmdList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(*bufferResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER));
-
-	hr = cmdList->Close();
-
-	if (FAILED(hr))
-	{
-		DebugPrint("Failed to close command list.");
-		cmdList->Release();
-		cmdAlloc->Release();
-		uploadBuffer->Release();
-		return false;
-	}
-
-	//execute the copy command
-	ID3D12CommandQueue *cmdQueue;
-	D3D12_COMMAND_QUEUE_DESC queueDesc = {};
-	queueDesc.Type = D3D12_COMMAND_LIST_TYPE_COPY;
-	queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
-	queueDesc.NodeMask = 0;
-
-	hr = device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&cmdQueue));
-
-	if (FAILED(hr))
-	{
-		DebugPrint("Failed to create command queue.");
-		cmdList->Release();
-		cmdAlloc->Release();
-		uploadBuffer->Release();
-		return false;
-	}
-
-	ID3D12CommandList *ppCommandLists[] = { cmdList };
-	cmdQueue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
-
-	//create a fence and wait for the copy to complete
-	ID3D12Fence *fence;
-	hr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
-
-	if (FAILED(hr))
-	{
-		DebugPrint("Failed to create fence.");
-		cmdQueue->Release();
-		cmdList->Release();
-		cmdAlloc->Release();
-		uploadBuffer->Release();
-		return false;
-	}
-
-	HANDLE hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-	if (hEvent == nullptr)
-	{
-		DebugPrint("Failed to create event.");
-		fence->Release();
-		cmdQueue->Release();
-		cmdList->Release();
-		cmdAlloc->Release();
-		uploadBuffer->Release();
-		return false;
-	}
-
-	hr = cmdQueue->Signal(fence, 1);
-	if (FAILED(hr))
-	{
-		DebugPrint("Failed to signal fence.");
-		CloseHandle(hEvent);
-		fence->Release();
-		cmdQueue->Release();
-		cmdList->Release();
-		cmdAlloc->Release();
-		uploadBuffer->Release();
-		return false;
-	}
-
-	if (fence->GetCompletedValue() < 1)
-	{
-		hr = fence->SetEventOnCompletion(1, hEvent);
-		if (SUCCEEDED(hr))
-		{
-			WaitForSingleObject(hEvent, INFINITE);
-		}
-		else
-		{
-			DebugPrint("Failed to set event on completion.");
-		}
-	}
-
-	CloseHandle(hEvent);
-	fence->Release();
-	cmdQueue->Release();
-
-	cmdList->Release();
-	cmdAlloc->Release();
-	uploadBuffer->Release();
-
-	if (FAILED(hr))
-	{
-		DebugPrint("Failed during buffer upload process.");
-		return false;
-	}
-
-	return true;
-}
-
-bool sbHeap::ImmediatelyUploadTextureToHeap(
-	ID3D12Device *device,
-	const D3D12_RESOURCE_DESC *desc,
-	const D3D12_RESOURCE_ALLOCATION_INFO *ai,
-	const void *data,
-	UINT dataSize,
-	D3D12_RESOURCE_STATES initialStates,
-	ID3D12Resource *texture
-)
-{
-	//check if it will fit in our upload budget
-	if (ai->SizeInBytes > UPLOAD_VRAM_BUDGET)
-	{
-		DebugPrint("Out of GPU upload memory budget!");
-		return false;
-	}
-
-	//create the intermediate buffer on the upload heap
-	//remember that we cannot use @desc since that is for a texture buffer
-	//and we cannot create a texture buffer on the upload heap,
-	//so it must be a generic, one dimensional buffer
-	D3D12_RESOURCE_DESC bufferDesc = {};
-	bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-	bufferDesc.Width = ai->SizeInBytes; //IMPORTANT: this number is greater that @dataSize since it involves alignment
-	bufferDesc.Height = 1;
-	bufferDesc.DepthOrArraySize = 1;
-	bufferDesc.MipLevels = 1;
-	bufferDesc.Format = DXGI_FORMAT_UNKNOWN;
-	bufferDesc.SampleDesc.Count = 1;
-	bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-	ID3D12Resource *intermediateBuffer;
-	if FAILED(device->CreatePlacedResource(
-		uploadHeap, 0, &bufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
-		nullptr, IID_PPV_ARGS(&intermediateBuffer)
-	))
-	{
-		DebugPrint("Failed to create a committed resource.");
-		return false;
-	}
-
-	//copy texture data to the upload buffer
-	UINT8 *pData;
-	CD3DX12_RANGE readRange(0, 0);
-	HRESULT hr = intermediateBuffer->Map(0, &readRange, reinterpret_cast<void **>(&pData));
-
-	if (FAILED(hr))
-	{
-		DebugPrint("Failed to map upload buffer.");
-		intermediateBuffer->Release();
-		return false;
-	}
-	memcpy(pData, data, dataSize);
-	intermediateBuffer->Unmap(0, nullptr);
-
-	ID3D12CommandAllocator *cmdAlloc;
-	hr = device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COPY, IID_PPV_ARGS(&cmdAlloc));
-	if (FAILED(hr))
-	{
-		DebugPrint("Failed to create command allocator.");
-		intermediateBuffer->Release();
-		return false;
-	}
-
-	ID3D12GraphicsCommandList *cmdList;
-	hr = device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COPY, cmdAlloc, nullptr, IID_PPV_ARGS(&cmdList));
-	if (FAILED(hr))
-	{
-		DebugPrint("Failed to create command list.");
-		cmdAlloc->Release();
-		intermediateBuffer->Release();
-		return false;
-	}
-
-	//START COPY TO HEAP
-	UINT64 requiredSize;
-	D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint;
-	device->GetCopyableFootprints(desc, 0, 1, 0, &footprint, nullptr, nullptr, &requiredSize);
-	//copy the texture data from the intermediate buffer to the texture resource using CopyTextureRegion
-	D3D12_TEXTURE_COPY_LOCATION srcLocation = {};
-	srcLocation.pResource = intermediateBuffer;
-	srcLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-	srcLocation.PlacedFootprint = footprint;
-
-	D3D12_TEXTURE_COPY_LOCATION dstLocation = {};
-	dstLocation.pResource = texture;
-	dstLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-	dstLocation.SubresourceIndex = 0;
-
-//	cmdList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(*bufferResource, initialStates, D3D12_RESOURCE_STATE_COPY_DEST));
-	cmdList->CopyTextureRegion(&dstLocation, 0, 0, 0, &srcLocation, nullptr);
-//	cmdList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(*bufferResource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER));
-
-	hr = cmdList->Close();
-
-	if (FAILED(hr))
-	{
-		DebugPrint("Failed to close command list.");
-		cmdList->Release();
-		cmdAlloc->Release();
-		intermediateBuffer->Release();
-		return false;
-	}
-
-	//execute the copy command
-	ID3D12CommandQueue *cmdQueue;
-	D3D12_COMMAND_QUEUE_DESC queueDesc = {};
-	queueDesc.Type = D3D12_COMMAND_LIST_TYPE_COPY;
-	queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
-	queueDesc.NodeMask = 0;
-
-	hr = device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&cmdQueue));
-
-	if (FAILED(hr))
-	{
-		DebugPrint("Failed to create command queue.");
-		cmdList->Release();
-		cmdAlloc->Release();
-		intermediateBuffer->Release();
-		return false;
-	}
-
-	ID3D12CommandList *ppCommandLists[] = { cmdList };
-	cmdQueue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
-
-	//create a fence and wait for the copy to complete
-	ID3D12Fence *fence;
-	hr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
-
-	if (FAILED(hr))
-	{
-		DebugPrint("Failed to create fence.");
-		cmdQueue->Release();
-		cmdList->Release();
-		cmdAlloc->Release();
-		intermediateBuffer->Release();
-		return false;
-	}
-
-	HANDLE hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-	if (hEvent == nullptr)
-	{
-		DebugPrint("Failed to create event.");
-		fence->Release();
-		cmdQueue->Release();
-		cmdList->Release();
-		cmdAlloc->Release();
-		intermediateBuffer->Release();
-		return false;
-	}
-
-	hr = cmdQueue->Signal(fence, 1);
-	if (FAILED(hr))
-	{
-		DebugPrint("Failed to signal fence.");
-		CloseHandle(hEvent);
-		fence->Release();
-		cmdQueue->Release();
-		cmdList->Release();
-		cmdAlloc->Release();
-		intermediateBuffer->Release();
-		return false;
-	}
-
-	if (fence->GetCompletedValue() < 1)
-	{
-		hr = fence->SetEventOnCompletion(1, hEvent);
-		if (SUCCEEDED(hr))
-		{
-			WaitForSingleObject(hEvent, INFINITE);
-		}
-		else
-		{
-			DebugPrint("Failed to set event on completion.");
-		}
-	}
-
-	CloseHandle(hEvent);
-	fence->Release();
-	cmdQueue->Release();
-
-	cmdList->Release();
-	cmdAlloc->Release();
-	intermediateBuffer->Release();
-
-	if (FAILED(hr))
-	{
-		DebugPrint("Failed during buffer upload process.");
-		return false;
-	}
-
-	return true;
-}
-#if 0
-bool sbHeap::CreateResource(
-	ID3D12Device *device,
-	const D3D12_RESOURCE_DESC *desc,
-	D3D12_RESOURCE_STATES initialState,
-	const D3D12_CLEAR_VALUE *clearValue,
-	ID3D12Resource **resource
-)
-{
-	assert(heap);
-
-	//get the size we need to use on the heap as well as the alignment
-	D3D12_RESOURCE_ALLOCATION_INFO ai = device->GetResourceAllocationInfo(0, 1, desc);
-	UINT64 newStartOffsetForResource = AlignOffset(currentOffset, ai.Alignment);
-
-	//check if it will fit in our budget
-	if (newStartOffsetForResource + ai.SizeInBytes > VRAM_BUDGET)
-	{
-		DebugPrint("Out of GPU memory budget!");
-		return false;
-	}
-
-	if FAILED(device->CreatePlacedResource(
-		heap,
-		newStartOffsetForResource,
-		desc,
-		initialState,
-		clearValue,
-		IID_PPV_ARGS(resource)
-	))
-	{
-		DebugPrint("Failed to create placed resource.");
-		return false;
-	}
-
-	currentOffset = newStartOffsetForResource + ai.SizeInBytes;
-	return true;
-}
-
-bool sbHeap::CreateAndFillResource(
-	ID3D12Device *device,
-	const D3D12_RESOURCE_DESC *desc,
-	D3D12_RESOURCE_STATES initialState,
-	const D3D12_CLEAR_VALUE *clearValue,
-	ID3D12Resource **resource
-)
-{
-	assert(heap);
-
-	if (!CreateResource(device, desc, initialState, clearValue, resource))
-		return false;
-
-	return ImmediatelyUploadToHeap(device, desc, ai, data, initialState, resource);
-}
-
-bool sbHeap::AllocateBufferOnUploadHeap(
-	ID3D12Device *device,
-	UINT64 size,
-	D3D12_RESOURCE_STATES initialStates,
-	ID3D12Resource **resource
-)
-{
-	//create the resource on the GPU's default heap
-	D3D12_RESOURCE_DESC resourceDesc = {};
-	resourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-	resourceDesc.Width = size;
-	resourceDesc.Height = 1;
-	resourceDesc.DepthOrArraySize = 1;
-	resourceDesc.MipLevels = 1;
-	resourceDesc.SampleDesc.Count = 1;
-	resourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-	//get the size we need to use on the heap as well as the alignment
-	D3D12_RESOURCE_ALLOCATION_INFO ai = device->GetResourceAllocationInfo(0, 1, &resourceDesc);
-
-	//check if it will fit in our upload budget
-	if (ai.SizeInBytes > UPLOAD_VRAM_BUDGET)
-	{
-		DebugPrint("Out of GPU upload memory budget!");
-		return false;
-	}
-
-	//create a buffer on the upload heap
-	if FAILED(device->CreatePlacedResource(
-		uploadHeap,
-		0,
-		&resourceDesc,
-		initialStates,
-		nullptr,
-		IID_PPV_ARGS(resource)
-	))
-	{
-		DebugPrint("Failed to create the placed resource on the GPU's upload heap.");
-		return false;
-	}
-
-	return true;
-}
-#endif
-/*
-*	Allocates space in static VRAM to store a given buffer (for example: vertex, index buffers).
-*/
-bool sbHeap::AllocateAndFillBuffer(
-	ID3D12Device *device,
-	const D3D12_RESOURCE_DESC *desc,
-	const void *data,
-	D3D12_RESOURCE_STATES initialStates,
-	ID3D12Resource **resource
-)
-{
-	//TODO: aren't all resources' initial states set to D3D12_RESOURCE_STATE_COPY_DEST?
-	//because we need to initialise them by copying from the upload heap...
-
-	assert(heap);
-	assert(uploadHeap);
-
-	//get the size we need to use on the heap as well as the alignment
-	D3D12_RESOURCE_ALLOCATION_INFO ai = device->GetResourceAllocationInfo(0, 1, desc);
-	UINT64 newStartOffsetForResource = AlignOffset(currentOffset, ai.Alignment);
-
-	//check if it will fit in our budget
-	if (newStartOffsetForResource + ai.SizeInBytes > VRAM_BUDGET)
-	{
-		DebugPrint("Out of GPU memory budget!");
-		return false;
-	}
-
-	if FAILED(device->CreatePlacedResource(
-		heap,
-		newStartOffsetForResource,
-		desc,
-		initialStates,
-		nullptr,
-		IID_PPV_ARGS(resource)
-	))
-	{
-		DebugPrint("Failed to create the resource on the GPU's default heap.");
-		return false;
-	}
-
-	currentOffset = newStartOffsetForResource + ai.SizeInBytes;
-
-	return ImmediatelyUploadToHeap(device, desc, &ai, data, initialStates, resource);
-}
-
-bool sbHeap::AllocateAndFillTexture(
-	ID3D12Device *device,
-	const D3D12_RESOURCE_DESC *desc,
-	const void *data,
-	UINT32 dataSize,
-	D3D12_RESOURCE_STATES initialStates,
-	ID3D12Resource **resource
-)
-{
-	//TODO: aren't all resources' initial states set to D3D12_RESOURCE_STATE_COPY_DEST?
-	//because we need to initialise them by copying from the upload heap...
-
-	assert(heap);
-	assert(uploadHeap);
-
-	//get the size we need to use on the heap as well as the alignment
-	D3D12_RESOURCE_ALLOCATION_INFO ai = device->GetResourceAllocationInfo(0, 1, desc);
-	UINT64 newStartOffsetForResource = AlignOffset(currentOffset, ai.Alignment);
-
-	//check if it will fit in our budget
-	if (newStartOffsetForResource + ai.SizeInBytes > VRAM_BUDGET)
-	{
-		DebugPrint("Out of GPU memory budget!");
-		return false;
-	}
-
-	if FAILED(device->CreatePlacedResource(
-		heap,
-		newStartOffsetForResource,
-		desc,
-		initialStates,
-		nullptr,
-		IID_PPV_ARGS(resource)
-	))
-	{
-		DebugPrint("Failed to create the resource on the GPU's default heap.");
-		return false;
-	}
-
-	currentOffset = newStartOffsetForResource + ai.SizeInBytes;
-
-	return ImmediatelyUploadTextureToHeap(device, desc, &ai, data, dataSize, initialStates, *resource);
-}
-#if 0
-static UINT CalculateImageSize(DXGI_FORMAT format, UINT width, UINT height)
-{
-	bool isBlockCompressed = false;
-	UINT bitsPerPixel = 0;
-	UINT blockSize = 0;
-
-	switch (format)
-	{
-	case DXGI_FORMAT_R8G8B8A8_UNORM:
-	case DXGI_FORMAT_R8G8B8A8_UINT:
-	case DXGI_FORMAT_D32_FLOAT:
-		bitsPerPixel = 32;
-		break;
-	case DXGI_FORMAT_BC1_UNORM:
-	case DXGI_FORMAT_BC1_UNORM_SRGB:
-		isBlockCompressed = true;
-		bitsPerPixel = 4;
-		blockSize = 4;
-		break;
-	case DXGI_FORMAT_BC2_UNORM:
-	case DXGI_FORMAT_BC2_UNORM_SRGB:
-	case DXGI_FORMAT_BC3_UNORM:
-	case DXGI_FORMAT_BC3_UNORM_SRGB:
-		isBlockCompressed = true;
-		bitsPerPixel = 8;
-		blockSize = 4;
-		break;
-	default:
-#ifndef NDEBUG
-		DebugPrint("Unsupported format. Please add!");
-#endif
-		return 0;
-	}
-
-	UINT imageSize;
-	if (isBlockCompressed)
-	{
-		UINT blockWidth = (width + blockSize - 1) / blockSize;
-		UINT blockHeight = (height + blockSize - 1) / blockSize;
-		imageSize = blockWidth * blockHeight * bitsPerPixel;
-	}
-	else
-		imageSize = width * height * (bitsPerPixel / 8);
-
-	return imageSize;
-}
-#endif
-/*
-*	Allocates space in static VRAM to store a given image (for example: a texture or a depth buffer).
-*/
-bool sbHeap::AllocateImage(ID3D12Device *device, DXGI_FORMAT format, UINT width, UINT height, D3D12_RESOURCE_STATES initialState, D3D12_RESOURCE_FLAGS flags, D3D12_CLEAR_VALUE *clearValue, ID3D12Resource **imageResource)
-{
-	assert(heap);
-
-	D3D12_RESOURCE_DESC resourceDesc = {};
-	resourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-	resourceDesc.Width = width;
-	resourceDesc.Height = height;
-	resourceDesc.DepthOrArraySize = 1;
-	resourceDesc.MipLevels = 1;
-	resourceDesc.Format = format;
-	resourceDesc.SampleDesc.Count = 1;
-	resourceDesc.Flags = flags;
-
-	//get the size we need to use on the heap as well as the alignment
-	D3D12_RESOURCE_ALLOCATION_INFO ai = device->GetResourceAllocationInfo(0, 1, &resourceDesc);
-	UINT64 newStartOffsetForResource = AlignOffset(currentOffset, ai.Alignment);
-
-	//check if it will fit in our budget
-	if (newStartOffsetForResource + ai.SizeInBytes > VRAM_BUDGET)
-	{
-		DebugPrint("Out of GPU memory budget!");
-		return false;
-	}
-
-	if FAILED(device->CreatePlacedResource(
-		heap,
-		newStartOffsetForResource,
-		&resourceDesc,
-		initialState,
-		clearValue, //should be nullptr on non-depth-stencil images
-		IID_PPV_ARGS(imageResource)
-	))
-	{
-		DebugPrint("Failed to create image.");
-		return false;
-	}
-
-	currentOffset = newStartOffsetForResource + ai.SizeInBytes;
-	return true;
-}
-
-void sbHeap::SetSafeResetCheckpoint()
-{
-	assert(heap);
-
-	safeOffset = currentOffset;
-}
-
-void sbHeap::Reset()
-{
-	assert(heap);
-	assert(safeOffset > 0); //there needs to be something inside the heap, and we must have already called SetSafeResetCheckpoint
-
-	//WARNING: make sure all created heap resources are released before resetting
-
-	currentOffset = safeOffset;
-}
-
-bool sbSwapChain::Create(ID3D12Device *device, HWND hWnd, IDXGIFactory6 *factory, sbHeap &heap)
-{
 	//create command queue
 	{
 		D3D12_COMMAND_QUEUE_DESC queueDesc = {};
@@ -730,15 +23,14 @@ bool sbSwapChain::Create(ID3D12Device *device, HWND hWnd, IDXGIFactory6 *factory
 		}
 	}
 
-	//get the window's client area size
-	RECT r;
-	GetClientRect(hWnd, &r);
-	LONG width = r.right;
-	LONG height = r.bottom;
+	//some arbitrary swap-chain width and height
+	//in fact it is recommended by Microsoft to resize the swap-chain
+	//to much higher values later on (on WM_SIZE event, for example)
+	constexpr uint32_t width = 256;
+	constexpr uint32_t height = 256;
 
 	//create the swap chain
 	{
-
 		DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
 		swapChainDesc.Width = width;
 		swapChainDesc.Height = height;
@@ -798,12 +90,12 @@ bool sbSwapChain::Create(ID3D12Device *device, HWND hWnd, IDXGIFactory6 *factory
 		clearValue.DepthStencil.Depth = 1.0f;
 		clearValue.DepthStencil.Stencil = 0;
 
-		//create depth buffer
-		if (!heap.AllocateImage(
+		//create depth buffer of big enough size
+		if (!heapManager.AllocateImage(
 			device,
 			DXGI_FORMAT_D32_FLOAT, //recommended depth format by nVidia
-			width,
-			height,
+			MAX_RESOLUTION_WIDTH,
+			MAX_RESOLUTION_HEIGHT,
 			D3D12_RESOURCE_STATE_DEPTH_WRITE,
 			D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
 			&clearValue,
@@ -835,8 +127,6 @@ bool sbSwapChain::Create(ID3D12Device *device, HWND hWnd, IDXGIFactory6 *factory
 		}
 	}
 
-	Resize(width, height);
-
 	return true;
 }
 
@@ -852,7 +142,7 @@ void sbSwapChain::Destroy()
 	if (dsvDescriptorHeap)
 		dsvDescriptorHeap->Release();
 
-	for (UINT i = 0; i < 2; ++i)
+	for (UINT i = 0; i < NUM_RENDER_TARGETS; ++i)
 	{
 		if (renderTargets[i])
 			renderTargets[i]->Release();
@@ -867,40 +157,71 @@ void sbSwapChain::Destroy()
 		queue->Release();
 }
 
-void sbSwapChain::Resize(UINT width, UINT height)
+void sbSwapChain::Resize(ID3D12Device *device, HeapManager &heapManager, UINT width, UINT height)
 {
-	viewport.Width = (float)800;
-	viewport.Height = (float)600;
+	assert(device && "Invalid ID3D12Device!");
+	assert(width > 0 && height > 0 && "Invalid render area sizes!");
+
+	if (width > MAX_RESOLUTION_WIDTH || height > MAX_RESOLUTION_HEIGHT)
+		return;
+
+//	WaitForGpu();
+
+	//release render target views
+	for (UINT i = 0; i < NUM_RENDER_TARGETS; ++i)
+	{
+		if (renderTargets[i])
+			renderTargets[i]->Release();
+	}
+
+	//resize the swapchain
+	swapChain->ResizeBuffers(NUM_RENDER_TARGETS, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 0);
+
+	//recreate render target views
+	UINT rtvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+	CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(rtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+	for (UINT i = 0; i < NUM_RENDER_TARGETS; ++i)
+	{
+		rtvHandles[i] = rtvHandle;
+		swapChain->GetBuffer(i, IID_PPV_ARGS(&renderTargets[i]));
+		device->CreateRenderTargetView(renderTargets[i], nullptr, rtvHandle);
+		rtvHandle.Offset(1, rtvDescriptorSize);
+	}
+
+	viewport.Width = (float)width;
+	viewport.Height = (float)height;
 	viewport.MaxDepth = 1.0f;
-	scissorRect.right = 800;
-	scissorRect.bottom = 600;
+	scissorRect.right = width;
+	scissorRect.bottom = height;
+
+	MoveToNextFrame();
 }
 
-void sbSwapChain::SetViewport(ID3D12GraphicsCommandList *commandList)
+void sbSwapChain::SetViewport(ID3D12GraphicsCommandList *commandList) const
 {
 	commandList->RSSetViewports(1, &viewport);
 	commandList->RSSetScissorRects(1, &scissorRect);
 }
 
-void sbSwapChain::TransitionToRenderable(ID3D12GraphicsCommandList *commandList)
+void sbSwapChain::TransitionToRenderable(ID3D12GraphicsCommandList *commandList) const
 {
 	commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET));
 }
 
-void sbSwapChain::TransitionToPresentable(ID3D12GraphicsCommandList *commandList)
+void sbSwapChain::TransitionToPresentable(ID3D12GraphicsCommandList *commandList) const
 {
 	commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT));
 }
 
-void sbSwapChain::BindRenderTarget(ID3D12GraphicsCommandList *commandList)
+void sbSwapChain::BindRenderTarget(ID3D12GraphicsCommandList *commandList) const
 {
 	commandList->OMSetRenderTargets(1, &rtvHandles[frameIndex], FALSE, &dsvHandle);
 }
 
-void sbSwapChain::ClearRenderTarget(ID3D12GraphicsCommandList *commandList)
+void sbSwapChain::ClearRenderTarget(ID3D12GraphicsCommandList *commandList) const
 {
-//	const float color[4] = { 0.1f, 0.2f, 0.0f, 1.0f };
-//	commandList->ClearRenderTargetView(rtvHandles[frameIndex], color, 0, nullptr);
+	const float color[4] = { 0.3f, 0.3f, 0.3f, 1.0f };
+	commandList->ClearRenderTargetView(rtvHandles[frameIndex], color, 0, nullptr);
 
 	commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 }
@@ -1000,39 +321,7 @@ void sbSwapChain::MoveToNextFrame()
 	fenceValues[frameIndex] = currentFenceValue + 1;
 }
 
-#if 0
-/*
-*	We are using a single queue for both rendering and presenting the swap chain,
-*	it simplifies GPU synchronization and is perfectly suitable for what we do.
-*/
-class sbCmdQueue
-{
-	ID3D12CommandQueue *queue = nullptr;
-
-public:
-	bool Create(ID3D12Device *device)
-	{
-		D3D12_COMMAND_QUEUE_DESC cqd;
-		cqd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;		//this type of command list can be used for all graphics, compute and presentation commands
-		cqd.Priority = 0;
-		cqd.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
-		cqd.NodeMask = 0;
-
-		HRESULT hr = device->CreateCommandQueue(&cqd, IID_PPV_ARGS(&queue));
-		return SUCCEEDED(hr);
-	}
-
-	void Destroy()
-	{
-		queue->Release();
-	}
-
-	void Execute(unsigned int count, ID3D12CommandList *const *commandLists)
-	{
-		queue->ExecuteCommandLists(count, commandLists);
-	}
-};
-#endif
+////////////////////////////////////////////////////////////////////////////////////////////////
 
 bool sbBaseRenderer::Create(HWND hWnd)
 {
@@ -1110,10 +399,10 @@ bool sbBaseRenderer::Create(HWND hWnd)
 	if (!AreAllEngineFeaturesSupported(device, hWnd))
 		return false;
 
-	if (!heap.Create(device))
+	if (!heapManager.Create(device))
 		return false;
 
-	if (!swapChain.Create(device, hWnd, factory, heap))
+	if (!swapChain.Create(device, hWnd, factory, heapManager))
 		return false;
 
 	//create command allocator and command list
@@ -1164,15 +453,29 @@ void sbBaseRenderer::Destroy()
 		commandAllocator->Release();
 
 	swapChain.Destroy();
-	heap.Destroy();
+	heapManager.Destroy();
 
 	if (device)
 		device->Release();
 	if (factory)
 		factory->Release();
+
+#if 0
+	ID3D12DebugDevice *debugInterface;
+	if (SUCCEEDED(device->QueryInterface(&debugInterface)))
+	{
+		debugInterface->ReportLiveDeviceObjects(D3D12_RLDO_DETAIL | D3D12_RLDO_IGNORE_INTERNAL);
+		debugInterface->Release();
+	}
+#endif
 }
 
-bool sbBaseRenderer::StartFrame()
+bool sbBaseRenderer::IsReady() const
+{
+	return commandList != nullptr;
+}
+
+bool sbBaseRenderer::StartFrame() const
 {
 	HRESULT hr = commandAllocator->Reset();
 	if (FAILED(hr))
@@ -1217,4 +520,33 @@ void sbBaseRenderer::EndAndPresentFrame()
 	swapChain.ExecuteAndPresent(_countof(commandLists), commandLists);
 
 	swapChain.MoveToNextFrame();
+}
+
+void sbBaseRenderer::ResizeFramebuffer(UINT width, UINT height)
+{
+	swapChain.Resize(device, heapManager, width, height);
+}
+
+void sbBaseRenderer::DrawDynamic(void *verts, uint32_t numVertices, uint32_t vertexSize, uint32_t *indices, uint32_t numIndices) const
+{
+	auto verticesSize = numVertices * vertexSize;
+	auto indicesSize = numIndices * sizeof(uint32_t);
+//	assert((char*)verts + verticesSize == (char*)indices); //TODO: vertices must be followed by indices, since we have only one buffer
+
+	auto bufferAddress = heapManager.UploadToDynamicBuffer(verts, verticesSize + indicesSize);
+
+	D3D12_VERTEX_BUFFER_VIEW vbv{};
+	vbv.BufferLocation = bufferAddress;
+	vbv.StrideInBytes = vertexSize;
+	vbv.SizeInBytes = verticesSize;
+	commandList->IASetVertexBuffers(0, 1, &vbv);
+
+//	D3D12_INDEX_BUFFER_VIEW ibv{};
+//	ibv.BufferLocation = vbv.BufferLocation + vbv.SizeInBytes; //just after the vertex buffer
+//	ibv.SizeInBytes = indicesSize;
+//	ibv.Format = DXGI_FORMAT_R32_UINT;
+//	commandList->IASetIndexBuffer(&ibv);
+
+//	commandList->DrawIndexedInstanced(numIndices, 1, 0, 0, 0);
+	commandList->DrawInstanced(numVertices, 1, 0, 0);
 }

@@ -1,4 +1,9 @@
-#include "FreeLookCamera.h"
+/*
+*	Room Editor Application
+*	(C) Moczulski Alan, 2023.
+*/
+
+#include "FreeLookCamera.hh"
 
 void FreeLookCamera::Reset()
 {
@@ -11,7 +16,18 @@ void FreeLookCamera::Reset()
 	yaw = MathConstants::PI;
 }
 
-Matrix &FreeLookCamera::GetViewMatrix()
+void FreeLookCamera::ResizeViewport(uint32_t width, uint32_t height)
+{
+	viewport.width = (float)width;
+	viewport.height = (float)height;
+}
+
+const Vector &FreeLookCamera::GetPosition() const
+{
+	return position;
+}
+
+const Matrix &FreeLookCamera::GetViewMatrix()
 {
 	lookDirection = Vector(cosf(yaw) * cosf(pitch), sinf(yaw) * cosf(pitch), sinf(pitch));
 	target = position + lookDirection;
@@ -19,13 +35,13 @@ Matrix &FreeLookCamera::GetViewMatrix()
 	return view;
 }
 
-Matrix &FreeLookCamera::GetProjMatrix()
+const Matrix &FreeLookCamera::GetProjMatrix()
 {
-	projection = Matrix::PerspectiveFovRH(MathConstants::PI / 2.5f, 800.0f / 600.0f, 1.0f, 4096.0f * 4);
+	projection = Matrix::PerspectiveFovRH(1.4f, viewport.width / viewport.height, 1.0f, 4096.0f * 4);
 	return projection;
 }
 
-Vector &FreeLookCamera::GetLookDirection()
+const Vector &FreeLookCamera::GetLookDirection() const
 {
 //	lookDirection = position - target;
 	return lookDirection;
@@ -73,4 +89,36 @@ void FreeLookCamera::Move(MovementDirection direction, float distance)
 
 	//update the view matrix after changing the camera position
 //	view = Matrix::LookAtRH(position, position + lookDirection);
+}
+
+static bool UnProject(const Vector &screen, const Matrix &viewProjection, const Viewport &viewport, Vector &world)
+{
+	//transformation coordinates normalised between -1 and 1
+	//	(-1, 1)--------(1, 1)
+	//	|		SCREEN		|
+	//	|					|
+	//	(-1, -1)------(1, -1)
+	Vector in(
+		(screen.x - viewport.x) * 2.0f / viewport.width - 1.0f,
+		(screen.y - viewport.y) * 2.0f / viewport.height - 1.0f,
+		screen.z,
+		1.0f
+	);
+
+	//compute inverse transformation
+	Matrix inverted = viewProjection.Invert();
+
+	//compute object coordinates
+	Vector out = inverted * in;
+	if (out[3] == 0.0f)
+		return false;
+
+	out /= out[3];
+	world = out;
+	return true;
+}
+
+bool FreeLookCamera::UnProjectFromScreen(const Vector &screen, Vector &world)
+{
+	return UnProject(screen, projection * view, viewport, world);
 }

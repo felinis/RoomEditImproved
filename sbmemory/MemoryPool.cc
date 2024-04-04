@@ -3,7 +3,7 @@
 *	(C) Moczulski Alan, 2023.
 */
 
-#include "MemoryPool.h"
+#include "MemoryPool.hh"
 #include <stdlib.h>
 #include <memory.h>
 #include <assert.h>
@@ -13,9 +13,9 @@ bool MemoryPool::Create(uint32_t size)
 	data = malloc(size);
 	if (!data)
 		return false;
-#ifndef NDEBUG
+
 	memset(data, 0, size);
-#endif
+
 	currentOffset = 0;
 	this->size = size;
 	return true;
@@ -44,8 +44,7 @@ const uint32_t MemoryPool::GetSize() const
 
 void MemoryPool::FlushFrom(uint32_t offset)
 {
-#ifndef NDEBUG
 	memset((void*)((size_t)data + (size_t)offset), 0, size - offset);
-#endif
+
 	currentOffset = offset;
 }

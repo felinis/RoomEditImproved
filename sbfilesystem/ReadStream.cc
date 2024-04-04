@@ -1,10 +1,10 @@
 /*
-*	File System Module for Sabre Engine
+*	File System Module
 *	Allows for reading a file using memory mapping, which is faster than reading the file using multiple fread calls.
 *	(C) Moczulski Alan, 2023.
 */
 
-#include "ReadStream.h"
+#include "ReadStream.hh"
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <string.h>

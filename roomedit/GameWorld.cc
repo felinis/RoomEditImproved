@@ -1,229 +1,14 @@
 /*
-*	Sabre World Editor Application
+*	Room Editor Application
 *	(C) Moczulski Alan, 2023.
 */
 
-#include "GameWorld.h"
+#include "GameWorld.hh"
+#include "common/result.hh"
+#include "world/ObjectProperties.hh"
 #include <utility> //std::move
-#include <optional>
 
-static Array<int> ReadDrawables(ReadStream& rs, MemoryPool& pool)
-{
-	//read the count
-	uint32_t numDrawables;
-	rs >> numDrawables;
-	assert(numDrawables <= 356); //sanity check
-
-	Array<int> array = std::move(pool.CreateArray<int>(numDrawables));
-	rs.Read(array.Data(), numDrawables * sizeof(int)); //read directly all the drawables
-
-	return std::move(array);
-}
-
-static Array<AINetwork> ReadAINetworks(ReadStream& rs, MemoryPool& pool)
-{
-	//read the count
-	uint32_t numAINetworks;
-	rs >> numAINetworks;
-	assert(numAINetworks == 0); //TEMPORARY!!!
-
-	Array<AINetwork> array = std::move(pool.CreateArray<AINetwork>(numAINetworks));
-
-	return std::move(array);
-}
-
-static Array<Light> ReadLights(ReadStream &rs, MemoryPool& pool)
-{
-	//read the count
-	uint32_t numLights;
-	rs >> numLights;
-	assert(numLights <= 256); //sanity check
-
-	Array<Light> array = std::move(pool.CreateArray<Light>(numLights));
-	rs.Read(array.Data(), numLights * sizeof(Light)); //read directly all the lights
-
-	return std::move(array);
-}
-
-static void ReadRecursiveSec(ReadStream& rs)
-{
-	char bRead;
-	rs >> bRead;
-	if (bRead)
-	{
-		rs.AdvanceBy(9);
-
-		short unk10;
-		rs >> unk10;
-		if (unk10)
-			rs.AdvanceBy((size_t)unk10 * 2);
-
-		/* dwa razy! */
-		ReadRecursiveSec(rs);
-		ReadRecursiveSec(rs);
-	}
-}
-
-static Face LoadFace(ReadStream &rs, MemoryPool &pool)
-{
-	Face face;
-
-	rs >> face.indexSurfaceProperty;
-	rs >> face.lightmapIndex;
-	rs >> face.typePoly;
-
-	rs >> face.numVerts;
-	face.vertexIndices = std::move(pool.CreateArray<unsigned short>(face.numVerts));
-	rs.Read(face.vertexIndices.Data(), face.numVerts * sizeof(unsigned short)); //read directly
-
-	uint16_t numI;
-	rs >> numI;
-	face.mi = std::move(pool.CreateArray<int>(numI));
-	rs.Read(face.mi.Data(), numI * sizeof(int)); //read directly
-
-	//load corner indices
-	uint32_t numGlobalI;
-	rs >> numGlobalI;
-	face.globalI = std::move(pool.CreateArray<short>(numGlobalI));
-	rs.Read(face.globalI.Data(), numGlobalI * sizeof(short)); //read directly
-
-	//load hull
-	uint32_t num_unk4;
-	rs >> num_unk4;
-	if (num_unk4 == 0)
-	{
-		rs >> face.hull.charC;
-		rs >> face.hull.vec0;
-		rs >> face.hull.vec1;
-		rs >> face.hull.normal;
-		rs >> face.hull.vec3;
-
-		uint32_t numVertices;
-		rs >> numVertices;
-		face.hull.vertices = std::move(pool.CreateArray<Vector3>(numVertices));
-		rs.Read(face.hull.vertices.Data(), numVertices * sizeof(Vector3)); //read directly
-
-		//check validity of that hull
-		face.hull.valid = face.hull.charC < 0 || face.indexSurfaceProperty != 3;
-	}
-
-	rs >> face.normal;
-	rs >> face.minExtent;
-	rs >> face.maxExtent;
-
-	bool unk5;
-	rs >> unk5;
-	if (unk5)
-	{
-		short unk6, unk7;
-		rs >> unk6;
-		rs >> unk7;
-		rs.AdvanceBy((size_t)unk6 * 2);
-		rs.AdvanceBy((size_t)unk7 * 2);
-
-		short unk8;
-		rs >> unk8;
-		rs.AdvanceBy((size_t)unk8 * 4);
-	}
-
-	return face;
-}
-
-static void LoadDrawableName(ReadStream &rs)
-{
-	uint32_t nameLength;
-	rs >> nameLength;
-	assert(nameLength < 32);
-	char name[32];
-	rs.Read(name, nameLength);
-//	OutputDebugString(name);
-//	OutputDebugString("\n");
-}
-
-static Mesh ReadMesh(ReadStream& rs, MemoryPool& pool)
-{
-	Mesh mesh;
-
-	LoadDrawableName(rs);
-
-	rs >> mesh.flags;
-
-	rs >> mesh.numVerts;
-	assert(mesh.numVerts <= 8000); //sanity check
-	uint32_t size = mesh.numVerts * sizeof(Vector3);
-	mesh.positions = pool.Allocate<Vector3>(mesh.numVerts);
-	rs.Read(mesh.positions, size);
-	mesh.normals = pool.Allocate<Vector3>(mesh.numVerts);
-	rs.Read(mesh.normals, size);
-
-	rs.AdvanceBy(4);
-
-	rs >> mesh.minExtent;
-	rs >> mesh.maxExtent;
-
-	uint32_t numCorners;
-	rs >> numCorners;
-	assert(numCorners <= 4000); //sanity check
-	if (numCorners == 0)
-		rs.AdvanceBy(4);
-	else
-	{
-		mesh.corners = std::move(pool.CreateArray<Corner>(numCorners));
-		rs.Read(mesh.corners.Data(), numCorners * sizeof(Corner)); //read directly
-
-		uint32_t numFaces;
-		rs >> numFaces;
-		assert(numFaces <= 2000); //sanity check
-		mesh.faces = std::move(pool.CreateArray<Face>(numFaces));
-		for (Face& face : mesh.faces)
-			face = std::move(LoadFace(rs, pool));
-	}
-
-	int numCornersTextureAxis;
-	rs >> numCornersTextureAxis;
-	struct TEXTURE_AXIS
-	{
-		Vector3 axis_u;
-		Vector3 axis_v;
-		Vector3 axis_w;
-	};
-	rs.AdvanceBy(numCornersTextureAxis * sizeof(TEXTURE_AXIS));
-
-	bool hasLocator;
-	rs >> hasLocator;
-	if (hasLocator)
-		rs.AdvanceBy(24);
-
-	//HIT_DATA
-	short unk5;
-	rs >> unk5;
-	if (unk5)
-		ReadRecursiveSec(rs);
-
-	return mesh;
-}
-
-static void ReadSubObjects(ReadStream& rs, MemoryPool& pool)
-{
-	uint32_t num_alphabet;
-	rs >> num_alphabet;
-	for (uint32_t i = 0; i < num_alphabet; i++)
-	{
-		rs.AdvanceBy(4);
-		ReadSubObjects(rs, pool);
-	}
-}
-
-static void ReadAdditionalPix(ReadStream &rs)
-{
-	rs.AdvanceBy(7);
-	int unk;
-	rs >> unk;
-	rs.AdvanceBy((size_t)unk * 4);
-	rs.AdvanceBy(16);
-}
-
-static Array<Room> ReadRooms(ReadStream& rs, MemoryPool& pool, Light* worldLights)
+static Array<Room> ReadRooms(ReadStream& rs, MemoryPool& pool, Light* worldLights, Object *worldObjects)
 {
 	//read the room count
 	uint32_t numRooms;
@@ -232,75 +17,7 @@ static Array<Room> ReadRooms(ReadStream& rs, MemoryPool& pool, Light* worldLight
 
 	Array<Room> array = std::move(pool.CreateArray<Room>(numRooms));
 	for (Room &room : array)
-	{
-		rs >> room.scale;
-		rs >> room.position;
-		rs >> room.sfxAmbient;
-		rs >> room.sfxEnvironmentData;
-
-		//room's lights
-		{
-			uint32_t numLights;
-			rs >> numLights;
-			assert(numLights < 256); //sanity check
-			room.lights = std::move(pool.CreateArray<Light *>(numLights));
-			for (Light*& light : room.lights)
-			{
-				uint32_t lightIndex;
-				rs >> lightIndex;
-				light = &worldLights[lightIndex];
-			}
-		}
-
-		//room's subobjects
-		ReadSubObjects(rs, pool);
-
-		//room's triggers
-		{
-			uint32_t numTriggers;
-			rs >> numTriggers;
-			assert(numTriggers < 128); //sanity check
-			room.triggers = std::move(pool.CreateArray<Trigger>(numTriggers));
-			for (auto& trigger : room.triggers)
-			{
-				LoadDrawableName(rs);
-
-				rs >> trigger.min;
-				rs >> trigger.max;
-
-				//int *n1, *n2, *n3;
-				rs.AdvanceBy(12);
-
-				bool b1;
-				rs >> b1;
-				if (b1)
-					ReadAdditionalPix(rs);
-
-				rs.AdvanceBy(4);
-				int num1;
-				rs >> num1;
-				rs.AdvanceBy(num1 * 4);
-			}
-		}
-
-		//room's ai networks
-		{
-			int numAINetworks;
-			rs >> numAINetworks;
-			rs.AdvanceBy(numAINetworks * 4);
-		}
-
-		//room's viewable rooms
-		{
-			int numViewableRooms;
-			rs >> numViewableRooms;
-			rs.AdvanceBy(numViewableRooms * 4);
-		}
-
-		//room's mesh
-		room.mesh = std::move(ReadMesh(rs, pool));
-		room.mesh.flags |= 3;
-	}
+		room.Load(rs, pool, worldLights, worldObjects);
 
 	return std::move(array);
 }
@@ -321,26 +38,334 @@ static Array<Room> MakeReflectors(ReadStream &rs, MemoryPool &pool)
 	return std::move(array);
 }
 
-static Array<Mesh> ReadMeshes(ReadStream &rs, MemoryPool &pool)
+static bool ReadMeshes(Array<Mesh> &meshes, ReadStream &rs, MemoryPool &pool)
 {
 	uint32_t numMeshes;
 	rs >> numMeshes;
-	assert(numMeshes <= 256); //sanity check
+	if (numMeshes > 256) //sanity check
+		return false;
 
-	Array<Mesh> array = std::move(pool.CreateArray<Mesh>(numMeshes));
-	for (auto &mesh : array)
+	meshes = std::move(pool.CreateArray<Mesh>(numMeshes));
+	for (auto &mesh : meshes)
 		mesh = ReadMesh(rs, pool);
 
-	return std::move(array);
+	return true;
 }
 
-static std::optional<uint32_t> GetRoomTexturesStartAddress(char *levelName)
+static bool ReadEmitters(Array<Emitter> &emitters, ReadStream &rs, MemoryPool &pool)
+{
+	uint32_t numEmitters;
+	rs >> numEmitters;
+	if (numEmitters > 256) //sanity check
+		return false;
+
+	emitters = std::move(pool.CreateArray<Emitter>(numEmitters));
+	for (auto &e : emitters)
+		e.Load(rs, pool);
+
+	return true;
+}
+
+static bool ReadSpotEffects(Array<SpotEffect> &spotEffects, ReadStream &rs, MemoryPool &pool)
+{
+	uint32_t numSpotEffects;
+	rs >> numSpotEffects;
+	if (numSpotEffects > 300) //sanity check
+		return false;
+
+	spotEffects = std::move(pool.CreateArray<SpotEffect>(numSpotEffects));
+	for (auto &e : spotEffects)
+		e.Load(rs, pool);
+
+	return true;
+}
+
+struct WP_ANIM
+{
+	struct WP_POS
+	{
+		float time;
+		float time_mod;
+		int wp;
+		int last_wp;
+		int link;
+	};
+	WP_POS pos;
+
+	uint32_t system_state;
+	struct WP
+	{
+		enum WPS_STATE
+		{
+			WPS_SYSTEM = 0,
+			WPS_TRIGGER = 1,
+			WPS_TRIGGEROFF = 2,
+			WPS_OFF = 3,
+			WPS_ON = 4,
+			WPS_CLOSED = 5,
+			WPS_OPEN = 6,
+			WPS_LEVEL1 = 7,
+			WPS_LEVEL2 = 8,
+			WPS_LEVEL3 = 9,
+			WPS_LEVEL4 = 10,
+			WPS_WAITING = 11,
+			WPS_READY = 12,
+			WPS_MOVING = 13,
+			WPS_BROKEN = 14,
+			WPS_NUMBER = 15
+		};
+		WPS_STATE state;
+		struct WP_LINK
+		{
+			WPS_STATE state;
+			bool check_conditions;
+			bool hold;
+			bool gravity;
+
+			struct WP_CONDITION
+			{
+				uint32_t state_index;
+			};
+			Array<WP_CONDITION> conditions;
+
+			int next;
+			float nframes;
+			float ease_to;
+			float ease_from;
+
+			void Load(ReadStream &rs, MemoryPool &pool)
+			{
+				rs >> state;
+				rs >> check_conditions;
+				rs >> hold;
+				rs >> gravity;
+
+				//load conditions
+				uint32_t nconditions;
+				rs >> nconditions;
+				conditions = pool.CreateArray<WP_CONDITION>(nconditions);
+				rs.Read(conditions.Data(), nconditions * sizeof(WP_CONDITION));
+
+				rs >> next;
+				rs >> nframes;
+				rs >> ease_to;
+				rs >> ease_from;
+			}
+		};
+		Array<WP_LINK> links;
+
+		void Load(ReadStream &rs, MemoryPool &pool)
+		{
+			uint32_t s;
+			rs >> s;
+
+			//load links
+			uint32_t nlinks;
+			rs >> nlinks;
+			links = pool.CreateArray<WP_LINK>(nlinks);
+			for (auto &link : links)
+				link.Load(rs, pool);
+		}
+	};
+	Array<WP> waypoints;
+
+//	WP_ANIM_DATA *data;
+
+	float accdec;
+	bool looping;
+	bool ai_network;
+	bool no_deviation;
+
+	void Load(ReadStream &rs, MemoryPool &pool)
+	{
+		uint32_t nwaypoints;
+		rs >> nwaypoints;
+		waypoints = std::move(pool.CreateArray<WP>(nwaypoints));
+		for (auto &wp : waypoints)
+		{
+			wp.Load(rs, pool);
+		}
+
+		rs >> pos.wp;
+
+		rs >> accdec;
+		rs >> ai_network;
+		rs >> no_deviation;
+
+		uint32_t type;
+		rs >> type;
+		while (type)
+		{
+			switch (type)
+			{
+			case 1: //WP_OBJECT_ANIM::Load
+				for (uint32_t i = 0; i < nwaypoints; i++)
+				{
+					bool invisible;
+					rs >> invisible;
+					Vector3 position, rotation;
+					rs >> position;
+					rs >> rotation;
+					uint32_t location;
+					rs >> location;
+					float spin;
+					rs >> spin;
+				}
+				break;
+			case 2: //WP_TEXTURE_ANIM::Load
+			{
+				uint32_t propertyIndex;
+				rs >> propertyIndex;
+				for (uint32_t i = 0; i < nwaypoints; i++)
+				{
+					uint32_t material;
+					rs >> material;
+					float u_offset;
+					rs >> u_offset;
+					float v_offset;
+					rs >> v_offset;
+					float roll;
+					rs >> roll;
+					float r;
+					rs >> r;
+					float g;
+					rs >> g;
+					float b;
+					rs >> b;
+				}
+				break;
+			}
+			case 3: //WP_SOUND_ANIM::Load
+				for (uint32_t i = 0; i < nwaypoints; i++)
+				{
+					uint32_t arrivalSoundID, leavingSoundID;
+					rs >> arrivalSoundID;
+					rs >> leavingSoundID;
+				}
+				break;
+			case 4: //WP_CHARACTER_ANIM::Load
+				for (uint32_t i = 0; i < nwaypoints; i++)
+				{
+					//TODO: add the actual enums
+					uint32_t type, speed, state;
+					rs >> type;
+					rs >> speed;
+					rs >> state;
+					uint16_t stateData;
+					rs >> stateData;
+					bool joinable;
+					rs >> joinable;
+				}
+				break;
+			default:
+				assert(0);
+				break;
+			}
+
+			rs >> type;
+		};
+	}
+};
+
+static bool ReadObjects(Array<Object> &objects, ReadStream &rs, MemoryPool &pool)
+{
+	for (auto &o : objects)
+	{
+		MESH_TYPE meshType;
+		rs >> meshType;
+		assert(meshType < 1000); //sanity check
+		uint32_t actorID;
+		rs >> actorID;
+		assert(actorID < 1000); //sanity check
+		o.drawableNumber = DrawableNumber(actorID, meshType);
+		rs >> o.radius;
+		assert(o.radius >= 0.0f);
+		rs >> o.scale;
+		assert(o.scale > 0.0f && o.scale <= 8.0f);
+		rs >> o.position;
+		ConvertHandedness(o.position);
+		rs >> o.rotation;
+		ConvertRotation(o.rotation);
+		rs >> o.type;
+
+		rs.AdvanceBy(4);
+
+		uint32_t type;
+		rs >> type;
+		while (type)
+		{
+			switch (type)
+			{
+			case 2: //OBJECT ANIM
+			{
+				WP_ANIM wpAnim;
+				wpAnim.Load(rs, pool);
+				break;
+			}
+			case 3: //TRIGGER
+			{
+				uint32_t s1, s2;
+				rs >> s1;
+				rs >> s2;
+				rs.AdvanceBy(4 * s2);
+				break;
+			}
+			case 5:
+			{
+//				o.immovable &= 0x7f;
+				break;
+			}
+			case 8:
+			{
+				OBJECT_PROPERTIES properties;
+				properties.Load(rs, pool);
+				break;
+			}
+			case 14: //POSITION_SOURCE_TARGET
+			{
+				Vector3 sourcePosition, targetPosition;
+				rs >> sourcePosition;
+				rs >> targetPosition;
+				break;
+			}
+			case 15: //EMITTER deflection plane?
+			{
+				Vector3 v;
+				rs >> v;
+				uint32_t a;
+				rs >> a;
+				break;
+			}
+			//case 18 exists only in final version of the game
+			case 18: //TEXTURE_SCALES::Load
+			{
+				uint32_t numTextureScales;
+				rs >> numTextureScales;
+				rs.AdvanceBy(numTextureScales * 36);
+//				Mesh m;
+//				m = ReadMesh(rs, pool);
+				break;
+			}
+			default:
+				break;
+			}
+
+			rs >> type;
+			assert(type < 20);
+		};
+	}
+
+	return true;
+}
+
+static uint32_t GetRoomTexturesStartAddress(const char *levelName)
 {
 	int levelID = levelName[0] | (levelName[1] << 8) | (levelName[2] << 16) | (levelName[3] << 24);
 	switch (levelID)
 	{
+	//SINGLEPLAYER LEVELS
 	case 'ltit': /* titlebackdrop */
-		return 0x61538;
+		return 0x61552; //NOTE: the one from Eden Demo version is 0x61538
 	case '10tc': /* cutscene01 */
 		return 0x43F56A;
 	case 'zalP': /* l1_plaza */
@@ -375,103 +400,195 @@ static std::optional<uint32_t> GetRoomTexturesStartAddress(char *levelName)
 		return 0xD258FD;
 	case 'dntc': /* cutscene_end */
 		return 0x400DE2;
+
+	//MULTIPLAYER LEVELS
 	case '10RR': /* roverracing_pc */
 		return 0x6875D1;
+	case '10fc': /* CaptureFlag_pc */
+		return 0x6CAED3;
+	case '20fc': /* CaptureFlag_02_pc */
+		return 0x62B603;
+	case '10MD':
+		return 0x3A06F4;
+	case '20MD':
+		return 0x602F75;
+	case '30md':
+		return 0x37F442;
+	case '40md':
+		return 0x3A3540;
+	case '50md':
+		return 0x389D65;
+	case '60MD':
+		return 0x62B6FD;
+	case '70MD':
+		return 0x684C8E;
+	case '80md':
+		return 0x5F36B1;
+
 	default:
-		return std::nullopt;
+		return 0;
 	}
 }
 
-bool GameWorld::Load(const char* filePath)
+RESULT GameWorld::Load(const char *filePath)
 {
+	MemoryPool pool;
 	pool.Create(1024 * 1024 * 20);
 
 	ReadStream rs;
 	if (!rs.Open(filePath))
-		return false;
+		return RESULT::CODE::FILE_FAILED_TO_OPEN;
 
 	//read the world header
-	rs >> worldHeader;
+	rs >> header;
 	
 	//check version
-	if (worldHeader.version != 72)
-		return false;
+	if (header.version != 72)
+	{
+		if (header.version == 'PMOC')
+			return RESULT::CODE::WORLD_COMPRESSED;
+		else
+			return RESULT::CODE::WORLD_VERSION_INCORRECT;
+	}
 
 	//skip one byte
 	rs.AdvanceBy(1);
 
-	drawables = std::move(ReadDrawables(rs, pool));
-	aiNetworks = std::move(ReadAINetworks(rs, pool));
-	lights = std::move(ReadLights(rs, pool));
-
-	uint32_t numObjects;
-	rs >> numObjects;
-	//TODO: create empty array of objects
-//	for (uint32_t i = 0; i < numObjects; i++)
-//		objects[i].index = i;
-
-	rooms = std::move(ReadRooms(rs, pool, lights.Data()));
-	reflectors = std::move(MakeReflectors(rs, pool));
-
-	rs >> fogColor;
-
-//	meshes = std::move(ReadMeshes(rs, pool));
-
-	//TODO: load the objects
-
-	//TEMP: go to textures directly
-	uint32_t address = GetRoomTexturesStartAddress(worldHeader.levelName).value();
-	rs.AdvanceTo(address);
-
-	//load texture wad
-	uint32_t numSystemTextures;
-	rs >> numSystemTextures;
-	assert(numSystemTextures == 5);
-	uint32_t numTextures;
-	rs >> numTextures;
-	assert(numTextures <= 2048);
-
-	textures = std::move(pool.CreateArray<TextureInformation>(numTextures));
-
-	//load the system textures
-//	for (uint32_t i = 0; i < numSystemTextures; i++)
-//	{
-//		auto& ti = textures[i];
-//		surface_properties[0].pmaterials = i;
-//		surface_materials[0x14] = 1;
-//		surface_materials = i;
-//	}
-
-	//load the usual textures
-	for (uint32_t i = 0; i < numTextures; i++)
+	//read drawables
 	{
-		auto& ti = textures[i];
-		ti.Load(rs, pool);
+		//read the count
+		uint32_t numDrawables;
+		rs >> numDrawables;
+		assert(numDrawables <= 356); //sanity check
+
+		drawables = std::move(pool.CreateArray<int>(numDrawables));
+		rs.Read(drawables.Data(), numDrawables * sizeof(int)); //read directly all the drawables
 	}
 
-	//load surface materials
+	//read AI networks
 	{
+		//read the count
+		uint32_t numAINetworks;
+		rs >> numAINetworks;
+
+		aiNetworks = std::move(pool.CreateArray<AINetwork>(numAINetworks));
+		for (auto &an : aiNetworks)
+		{
+			WP_ANIM wpAnim;
+			wpAnim.Load(rs, pool);
+		}
+	}
+
+	//read lights
+	{
+		//read the count
+		uint32_t numLights;
+		rs >> numLights;
+		assert(numLights <= 300); //sanity check
+
+		lights = std::move(pool.CreateArray<Light>(numLights));
+		rs.Read(lights.Data(), numLights * sizeof(Light)); //read directly all the lights
+		for (auto &light : lights)
+		{
+			ConvertHandedness(light.position);
+			ConvertHandedness(light.direction);
+		}
+	}
+
+	//pre-initialise objects
+	{
+		uint32_t numObjects;
+		rs >> numObjects;
+		objects = std::move(pool.CreateArray<Object>(numObjects));
+
+		//just initialise their index
+		for (uint32_t i = 0; i < numObjects; i++)
+			objects[i].index = i;
+	}
+
+	//read rooms
+	{
+		rooms = std::move(ReadRooms(rs, pool, lights.Data(), objects.Data()));
+		reflectors = std::move(MakeReflectors(rs, pool));
+	}
+
+	//read the fog color
+	RGBAColor fogColor;
+	rs >> fogColor;
+
+	//read meshes
+	{
+		if (!ReadMeshes(meshes, rs, pool))
+			return RESULT::CODE::WORLD_MESHES_FAILED_TO_LOAD;
+	}
+
+	//read emitters
+	{
+		if (!ReadEmitters(emitters, rs, pool))
+			return RESULT::CODE::WORLD_EMITTERS_FAILED_TO_LOAD;
+	}
+
+	//read spoteffects
+	{
+		if (!ReadSpotEffects(spotEffects, rs, pool))
+			return RESULT::CODE::WORLD_SPOT_EFFECTS_FAILED_TO_LOAD;
+	}
+
+	//read objects
+	{
+		if (!ReadObjects(objects, rs, pool))
+			return RESULT::CODE::WORLD_OBJECTS_FAILED_TO_LOAD;
+	}
+
+	//TEMP: go to textures directly
+//	if (!actorWAD.Load(rs, pool))
+//		return RESULT::CODE::WORLD_OBJECTS_FAILED_TO_LOAD;
+
+	//read textures
+	{
+		uint32_t address = GetRoomTexturesStartAddress(header.levelName);
+		if (address == 0)
+			return RESULT::CODE::WORLD_TEXTURES_ADDRESS_INCORRECT;
+		rs.AdvanceTo(address);
+
+		//load texture wad
+		uint32_t numSystemTextures;
+		rs >> numSystemTextures;
+		assert(numSystemTextures == GameWorld::NUM_SYSTEM_TEXTURES);
+		uint32_t numTextures;
+		rs >> numTextures;
+		assert(numTextures == 2048);
+
+		textures = std::move(pool.CreateArray<TextureInformation>(numTextures));
+
+		//load the system textures
+	//	for (uint32_t i = 0; i < numSystemTextures; i++)
+	//	{
+	//		auto& ti = textures[i];
+	//		surface_properties[0].pmaterials = i;
+	//		surface_materials[0x14] = 1;
+	//		surface_materials = i;
+	//	}
+
+		//load the usual textures
+		for (uint32_t i = 0; i < numTextures; i++)
+			textures[i].Load(rs, pool);
+
+		//load surface materials
 		uint32_t nsurface_materials;
 		rs >> nsurface_materials;
 		surfaceMaterials = std::move(pool.CreateArray<SurfaceMaterial>(nsurface_materials));
-		for (auto& sm : surfaceMaterials)
+		for (auto &sm : surfaceMaterials)
 			sm.Load(rs);
-	}
 
-	//load surface properties
-	{
+		//load surface properties
 		uint32_t nsurface_properties;
 		rs >> nsurface_properties;
 		surfaceProperties = std::move(pool.CreateArray<SurfaceProperty>(nsurface_properties));
-		for (auto& sp : surfaceProperties)
+		for (auto &sp : surfaceProperties)
 			sp.Load(rs, pool);
 	}
 
 	rs.Close();
-	return true;
-}
-
-void GameWorld::Unload()
-{
-	pool.Destroy();
+	return RESULT::CODE::OK;
 }
