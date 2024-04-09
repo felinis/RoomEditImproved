@@ -14,6 +14,9 @@ The program sports a lightweight UI, which was programmed using the native Windo
 # Screens
 This screen shows the program user interface with a temple level loaded in. The user can add and remove objects, as well as alter their various attributes on the panel on the right.
 <img width="948" alt="up" src="https://github.com/felinis/RoomEditImproved/assets/94763702/69db9ec7-f0ed-44d2-96a8-2915ea365020">
+<img width="948" alt="down"
+src="https://github.com/felinis/RoomEditImproved/assets/94763702/e746ca92-8bad-4bf9-8e52-a0623ca49228">
+<img width="948" alt="room_editor_prop_value" src="https://github.com/felinis/RoomEditImproved/assets/94763702/3d5ec819-a61e-4bd4-ad07-328276621281">
 
 # Building Instructions
 - Install Visual Studio (2017 is recommended). I haven't tested MinGW, but make sure it supports C++17.
